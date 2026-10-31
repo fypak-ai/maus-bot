@@ -39,6 +39,25 @@ function readBody(req, maxBytes = 64 * 1024) {
 function agentReply(prompt) {
   return new Promise((resolve, reject) => {
     const command = engineArgs[engine] ? engine : null;
+    if (engine === 'api') {
+      const body = JSON.stringify({
+        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY || 'sentinel', 'anthropic-version': '2023-06-01' },
+        body,
+      }).then(async (r) => {
+        const json = await r.json().catch(() => ({}));
+        if (!r.ok) return reject(Object.assign(new Error(json.error?.message || ('API ' + r.status)), { status: 502 }));
+        const text = (json.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+        if (!text) return reject(Object.assign(new Error('Resposta vazia da API.'), { status: 502 }));
+        resolve(text);
+      }).catch((e) => reject(Object.assign(e, { status: 502 })));
+      return;
+    }
     if (!command) return reject(Object.assign(new Error('Configure OPENMAUSBOT_ENGINE como codex ou claude.'), { status: 503 }));
     const child = spawn(command, engineArgs[command], { cwd: root, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '';
@@ -86,7 +105,7 @@ function buildPrompt(body) {
 
 async function handleApi(req, res, pathname) {
   if (pathname === '/api/status' && req.method === 'GET') {
-    const available = Boolean(engineArgs[engine]) && spawnSync(engine, ['--version'], { encoding: 'utf8', timeout: 3_000 }).status === 0;
+    const available = engine === 'api' ? true : Boolean(engineArgs[engine]) && spawnSync(engine, ['--version'], { encoding: 'utf8', timeout: 3_000 }).status === 0;
     return send(res, 200, { engine, available, mode: 'read-only' });
   }
   if (pathname === '/api/chat' && req.method === 'POST') {
